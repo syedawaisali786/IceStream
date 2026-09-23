@@ -4,6 +4,12 @@ import uuid
 import json
 from datetime import datetime, timezone
 
+from kafka import KafkaProducer
+
+
+KAFKA_SERVER = "localhost:9092"
+KAFKA_TOPIC = "icestream-transactions"
+
 
 PRODUCTS = [
     "Laptop",
@@ -26,13 +32,17 @@ REGIONS = [
 ]
 
 
+producer = KafkaProducer(
+    bootstrap_servers=KAFKA_SERVER,
+    value_serializer=lambda value: json.dumps(value).encode("utf-8")
+)
+
+
 def generate_transaction():
 
-    # Generate transaction values
     amount = round(random.uniform(100, 50000), 2)
     tax_amount = round(amount * 0.18, 2)
 
-    # Create transaction
     transaction = {
         "transaction_id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -52,7 +62,7 @@ def generate_transaction():
     if random.random() < 0.05:
         transaction["tax_amount"] = None
 
-    # Simulate schema change occasionally
+    # Simulate schema drift occasionally
     if random.random() < 0.02:
         transaction["customer_type"] = random.choice([
             "NEW",
@@ -68,16 +78,38 @@ def main():
     print("========================================")
     print("       IceStream Transaction Generator")
     print("========================================")
-    print("Generating e-commerce transactions...")
+    print("Kafka server:", KAFKA_SERVER)
+    print("Kafka topic:", KAFKA_TOPIC)
+    print("Generating transactions...")
     print("Press CTRL + C to stop.\n")
 
-    while True:
+    try:
 
-        transaction = generate_transaction()
+        while True:
 
-        print(json.dumps(transaction))
+            transaction = generate_transaction()
 
-        time.sleep(1)
+            producer.send(
+                KAFKA_TOPIC,
+                value=transaction
+            )
+
+            producer.flush()
+
+            print(
+                "Sent to Kafka:",
+                transaction["transaction_id"]
+            )
+
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+
+        print("\nStopping transaction generator...")
+
+    finally:
+
+        producer.close()
 
 
 if __name__ == "__main__":
