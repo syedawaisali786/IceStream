@@ -1,5 +1,11 @@
+import json
+from datetime import datetime, timezone
+from kafka import KafkaProducer
+
 from circuit_breaker import CircuitBreaker
-from dlq_handler import DeadLetterQueue
+
+KAFKA_SERVER = "localhost:9092"
+DLQ_TOPIC = "icestream-dlq"
 
 
 def process_records(records):
@@ -11,12 +17,7 @@ def process_records(records):
     )
 
     breaker = CircuitBreaker()
-    dlq = DeadLetterQueue()
-
-    result = breaker.evaluate(
-        total_records,
-        failed_records
-    )
+    result = breaker.evaluate(total_records, failed_records)
 
     print("IceStream Pipeline Guard")
     print("========================")
@@ -27,20 +28,35 @@ def process_records(records):
     print("Action:", result["action"])
 
     if result["state"] == "OPEN":
-        print("\n⚠ CIRCUIT BREAKER OPEN")
-        print("Routing invalid records to DLQ...\n")
+        print("Circuit breaker OPEN. Sending invalid records to Kafka DLQ.")
 
-        for record in records:
-            if record.get("tax_amount") is None:
-                dlq.quarantine(
-                    record,
-                    "Tax amount is NULL"
-                )
+        producer = KafkaProducer(
+            bootstrap_servers=KAFKA_SERVER,
+            value_serializer=lambda value: json.dumps(value).encode("utf-8")
+        )
 
-        print("DLQ records:", dlq.count())
+        try:
+            for record in records:
+                if record.get("tax_amount") is None:
+                    dlq_record = {
+                        **record,
+                        "quarantined_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                        "failure_reason": "Tax amount is NULL"
+                    }
+
+                    producer.send(DLQ_TOPIC, value=dlq_record)
+                    print("Quarantined:", record.get("transaction_id"))
+
+            producer.flush()
+            print("DLQ messages sent successfully.")
+
+        finally:
+            producer.close()
 
     else:
-        print("\n✓ Pipeline continues normally")
+        print("Pipeline continues normally.")
 
     return result
 
